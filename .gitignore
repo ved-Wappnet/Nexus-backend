@@ -1,0 +1,25 @@
+# Environment
+.env
+.env.local
+
+# Build
+dist
+node_modules
+
+# Uploaded product images (keep folder)
+uploads/*
+!uploads/**/.gitkeep
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Logs / OS
+*.log
+npm-debug.log*
+.DS_Store
+*.tsbuildinfo
