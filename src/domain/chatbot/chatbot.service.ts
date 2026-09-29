@@ -628,4 +628,81 @@ Tone & Persona Guidelines:
       metadata: { provider: 'nexus-fallback', model: 'rule-engine' },
     };
   }
+
+  getFaqsAndPolicies() {
+    return {
+      knowledgeBase: NEXUS_KNOWLEDGE_BASE.trim(),
+      categories: [
+        {
+          id: 'escrow-inspection',
+          title: '🛡️ 72-Hour Milestone Escrow & Inspection Guarantee',
+          summary: 'Nexus protects both buyers and suppliers with automated milestone escrow ledgering and a 72-hour physical inspection window.',
+          faqs: [
+            {
+              question: 'How does the 72-hour inspection window work?',
+              answer: 'Once your consignment arrives at your dock and is signed for, an automated 72-hour countdown timer begins. You have 72 hours to unbox, inspect goods, and test for defects.',
+              link: '/orders',
+            },
+            {
+              question: 'What happens when I click "Confirm Delivery & Release Escrow"?',
+              answer: 'Confirming delivery completes the inspection process immediately and releases the remaining protected 30% milestone funds to the supplier.',
+              link: '/orders',
+            },
+            {
+              question: 'How do I open an inspection dispute if goods are damaged or missing?',
+              answer: 'Within the active 72-hour window, click "Report Defect / Dispute". This immediately freezes the escrow balance and routes your evidence to admin arbitration.',
+              link: '/inspection-dispute',
+            },
+          ],
+        },
+        {
+          id: 'returns-refunds',
+          title: '🔄 30-Day Return & Refund Policy',
+          summary: 'All products are backed by our 30-day buyer protection warranty.',
+          faqs: [
+            {
+              question: 'What is the return period?',
+              answer: 'You can initiate a return within 30 days of receiving your shipment.',
+              link: '/orders',
+            },
+            {
+              question: 'How long do refunds take?',
+              answer: 'Approved refunds are credited to the original payment method within 3 to 5 business days.',
+              link: '/tickets',
+            },
+          ],
+        },
+        {
+          id: 'logistics-handover',
+          title: '🚚 Courier Logistics & Dynamic QR Handover',
+          summary: 'Real-time GPS courier tracking with dock proximity radar and dynamic proof-of-delivery (e-POD).',
+          faqs: [
+            {
+              question: 'How does the dock proximity radar work?',
+              answer: 'When the delivery driver is within 500 meters of the delivery destination dock, a proximity alert and sonar chime trigger on the order tracking map.',
+              link: '/orders',
+            },
+            {
+              question: 'What is the dynamic Delivery QR code?',
+              answer: 'To ensure zero lost consignments, the courier verifies the dynamic QR code on your order packing slip and collects an electronic signature before handover.',
+              link: '/orders',
+            },
+          ],
+        },
+        {
+          id: 'wholesale-rfq',
+          title: '💼 Wholesale RFQ & Bulk Volume Pricing',
+          summary: 'Custom pricing and volume negotiations directly between wholesale buyers and verified suppliers.',
+          faqs: [
+            {
+              question: 'How do I request wholesale bulk pricing?',
+              answer: 'On any product catalog page, click "Request Wholesale Quote" to submit quantity targets and proposed pricing to the supplier.',
+              link: '/products',
+            },
+          ],
+        },
+      ],
+    };
+  }
 }
+

@@ -1,7 +1,7 @@
 import { CurrentUser, Public } from '@core/decorators';
 import { JwtAuthGuard } from '@core/guards';
 import { Actor } from '@core/interfaces';
-import { Body, Controller, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Res, UseGuards } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { ChatbotService } from './chatbot.service';
@@ -12,6 +12,22 @@ import { SendChatMessageDto } from './dto/chat-message.dto';
 @UseGuards(JwtAuthGuard)
 export class ChatbotController {
   constructor(private readonly chatbotService: ChatbotService) {}
+
+  @Public()
+  @Get('faqs')
+  @ApiOperation({ summary: 'Get structured FAQs and store policy documents for instant answers' })
+  @ApiOkResponse({ description: 'Structured FAQ categories and knowledge base' })
+  getFaqs() {
+    return this.chatbotService.getFaqsAndPolicies();
+  }
+
+  @Public()
+  @Get('policies')
+  @ApiOperation({ summary: 'Get store policy text and SLA guidelines' })
+  @ApiOkResponse({ description: 'Store policies and terms' })
+  getPolicies() {
+    return this.chatbotService.getFaqsAndPolicies();
+  }
 
   @Public()
   @Post('chat')
