@@ -40,6 +40,7 @@ import {
 } from '@nestjs/swagger';
 import { ProductsService } from './products.service';
 import { AiReviewService } from './ai-review.service';
+import { PriceComparisonService } from './price-comparison.service';
 
 const products = 'products';
 
@@ -52,7 +53,9 @@ export class ProductsController {
   constructor(
     private readonly products: ProductsService,
     private readonly aiReview: AiReviewService,
+    private readonly priceComparison: PriceComparisonService,
   ) {}
+
 
   @Public()
   @Get()
@@ -224,4 +227,14 @@ export class ProductsController {
   ) {
     return this.products.submitReview(actor, productId, dto);
   }
+
+  @Public()
+  @Get(':id/market-comparison')
+  @ApiOperation({ summary: 'Get external competitor price comparison (Nexus vs Amazon vs Flipkart)' })
+  @ApiParam({ name: 'id', description: 'Product ID' })
+  @ApiOkResponse({ description: 'Market price comparison with savings analysis' })
+  getMarketComparison(@CurrentUser() actor: Actor | undefined, @Param('id') id: string) {
+    return this.priceComparison.getMarketComparison(actor, id);
+  }
 }
+
