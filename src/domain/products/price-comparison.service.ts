@@ -56,10 +56,10 @@ export class PriceComparisonService {
     }
 
     const product = rows[0];
-    const nexusPrice = Number(product.price);
-    const title = product.title;
+    return this.computeComparison(product.id, product.title, Number(product.price));
+  }
 
-    // Use deterministic hash of title/price to compute reliable, realistic benchmark pricing
+  computeComparison(productId: string, title: string, nexusPrice: number): MarketPriceComparisonResponse {
     const quotes = this.computeMarketQuotes(title, nexusPrice);
 
     const competitorPrices = quotes.map((q) => q.price);
@@ -71,7 +71,7 @@ export class PriceComparisonService {
       bestCompetitorPrice > 0 ? Math.round(((bestCompetitorPrice - nexusPrice) / bestCompetitorPrice) * 100) : 0;
 
     return {
-      productId: product.id,
+      productId,
       productTitle: title,
       nexusPrice,
       currency: 'USD',

@@ -20,6 +20,7 @@ import {
   RfqChatMessageEntity,
   DeliveryPartnerEntity,
   CampaignAnalyticsEntity,
+  PriceAlertEntity,
 } from '@core/entities';
 import { DatabaseModule } from '@database/database.module';
 import { DomainModule } from '@domain/domain.module';
@@ -63,6 +64,7 @@ import { SharedModule } from '@shared/shared.module';
           ProductReviewEntity,
           DeliveryPartnerEntity,
           CampaignAnalyticsEntity,
+          PriceAlertEntity,
         ],
         synchronize: true,
         logging: ['error'],

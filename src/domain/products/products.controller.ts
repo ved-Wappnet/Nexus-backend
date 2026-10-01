@@ -4,10 +4,12 @@ import { CurrentUser, Public, Roles } from '@core/decorators';
 import { JwtAuthGuard, RolesGuard } from '@core/guards';
 import { Actor } from '@core/interfaces';
 import {
+  CreatePriceAlertDto,
   CreateReviewDto,
   ListProductsQueryDto,
   ListReviewsQueryDto,
   ModerateDto,
+  SimulatePriceDropDto,
   StockDto,
   UpsertProductDto,
 } from '@domain/products/dtos';
@@ -41,6 +43,7 @@ import {
 import { ProductsService } from './products.service';
 import { AiReviewService } from './ai-review.service';
 import { PriceComparisonService } from './price-comparison.service';
+import { PriceAlertService } from './price-alert.service';
 
 const products = 'products';
 
@@ -54,6 +57,7 @@ export class ProductsController {
     private readonly products: ProductsService,
     private readonly aiReview: AiReviewService,
     private readonly priceComparison: PriceComparisonService,
+    private readonly priceAlerts: PriceAlertService,
   ) {}
 
 
@@ -235,6 +239,57 @@ export class ProductsController {
   @ApiOkResponse({ description: 'Market price comparison with savings analysis' })
   getMarketComparison(@CurrentUser() actor: Actor | undefined, @Param('id') id: string) {
     return this.priceComparison.getMarketComparison(actor, id);
+  }
+
+  @Get('price-alerts/my-alerts')
+  @ApiOperation({ summary: 'Get all active price alerts for the logged-in customer' })
+  @ApiOkResponse({ description: 'List of active price alerts' })
+  getMyPriceAlerts(@CurrentUser() actor: Actor) {
+    return this.priceAlerts.getUserAlerts(actor.userId);
+  }
+
+  @Delete('price-alerts/:alertId')
+  @ApiOperation({ summary: 'Cancel or unsubscribe from a price alert' })
+  @ApiParam({ name: 'alertId', description: 'Price Alert ID' })
+  cancelPriceAlert(
+    @CurrentUser() actor: Actor | undefined,
+    @Param('alertId') alertId: string,
+    @Query('email') email?: string,
+  ) {
+    return this.priceAlerts.cancelAlert(actor?.userId ?? null, alertId, email);
+  }
+
+  @Public()
+  @Post(':id/price-alerts')
+  @ApiOperation({ summary: 'Create or update a price drop watch alert for a product' })
+  @ApiParam({ name: 'id', description: 'Product ID' })
+  @ApiOkResponse({ description: 'Created or updated price alert' })
+  createPriceAlert(
+    @CurrentUser() actor: Actor | undefined,
+    @Param('id') id: string,
+    @Body() dto: CreatePriceAlertDto,
+  ) {
+    return this.priceAlerts.createOrUpdateAlert(actor?.userId ?? null, id, dto);
+  }
+
+  @Public()
+  @Get(':id/price-alerts/status')
+  @ApiOperation({ summary: 'Check if current user or email is watching this product' })
+  @ApiParam({ name: 'id', description: 'Product ID' })
+  getPriceAlertStatus(
+    @CurrentUser() actor: Actor | undefined,
+    @Param('id') id: string,
+    @Query('email') email?: string,
+  ) {
+    return this.priceAlerts.getAlertStatus(actor?.userId ?? null, email ?? null, id);
+  }
+
+  @Public()
+  @Post(':id/simulate-price-drop')
+  @ApiOperation({ summary: 'Simulate a price drop on a product to evaluate and trigger alerts' })
+  @ApiParam({ name: 'id', description: 'Product ID' })
+  simulatePriceDrop(@Param('id') id: string, @Body() dto: SimulatePriceDropDto) {
+    return this.priceAlerts.evaluateProductAlerts(id, dto.newPrice);
   }
 }
 

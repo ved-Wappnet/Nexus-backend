@@ -1,6 +1,6 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 
-export type NotificationType = 'RFQ' | 'ORDER' | 'TICKET' | 'WATCHLIST' | 'SYSTEM';
+export type NotificationType = 'RFQ' | 'ORDER' | 'TICKET' | 'WATCHLIST' | 'PRICE_DROP' | 'SYSTEM';
 
 @Entity('notifications')
 @Index(['userId', 'createdAt'])

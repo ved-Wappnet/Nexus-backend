@@ -14,3 +14,4 @@ export { ProductReviewEntity } from './review.entity';
 export { RfqChatMessageEntity } from './rfq-chat-message.entity';
 export { DeliveryPartnerEntity, DeliveryPartnerDocument } from './delivery-partner.entity';
 export { CampaignAnalyticsEntity } from './campaign-analytics.entity';
+export { PriceAlertEntity, PriceAlertType } from './price-alert.entity';
