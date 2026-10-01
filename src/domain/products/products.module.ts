@@ -9,6 +9,7 @@ import { PriceComparisonService } from './price-comparison.service';
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
 import { SemanticSearchService } from './semantic-search.service';
+import { VisualSearchService } from './visual-search.service';
 
 @Module({
   imports: [
@@ -23,8 +24,9 @@ import { SemanticSearchService } from './semantic-search.service';
     AiReviewService,
     PriceComparisonService,
     PriceAlertService,
+    VisualSearchService,
   ],
-  exports: [ProductsService, PriceComparisonService, PriceAlertService],
+  exports: [ProductsService, PriceComparisonService, PriceAlertService, VisualSearchService],
 })
 export class ProductsModule {}
 

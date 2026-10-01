@@ -1,9 +1,9 @@
 import { ErrorViewModel } from '@common/vms';
 import { ACCESS_TOKEN, UserRoles } from '@core/constants';
-import { CurrentUser, Roles } from '@core/decorators';
+import { CurrentUser, Public, Roles } from '@core/decorators';
 import { JwtAuthGuard, RolesGuard } from '@core/guards';
 import { Actor } from '@core/interfaces';
-import { FulfillDto, ReleaseEscrowDto, CreateEscrowDisputeDto, ResolveEscrowDisputeDto, VerifyDeliveryQrDto, UpdateOrderAddressDto } from '@domain/orders/dtos';
+import { FulfillDto, ReleaseEscrowDto, CreateEscrowDisputeDto, ResolveEscrowDisputeDto, VerifyDeliveryQrDto, UpdateOrderAddressDto, GenerateProFormaQuoteDto } from '@domain/orders/dtos';
 import { CreateOrderDto } from '@domain/orders/dtos/create-order.dto';
 import { Body, Controller, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
@@ -174,6 +174,50 @@ export class OrdersController {
     res.end(buffer);
   }
 
+  @Public()
+  @Post('orders/proforma-quote')
+  @ApiTags('orders')
+  @ApiOperation({ summary: 'Generate structured Pro-Forma Quote & Invoice data' })
+  getProFormaQuoteData(
+    @CurrentUser() actor: Actor | null,
+    @Body() dto: GenerateProFormaQuoteDto,
+  ) {
+    return this.orders.getProFormaQuoteData(actor, dto);
+  }
+
+  @Public()
+  @Post('orders/proforma-quote/pdf')
+  @ApiTags('orders')
+  @ApiOperation({ summary: 'Generate and download official B2B Pro-Forma Invoice as PDF' })
+  async downloadProFormaQuotePdf(
+    @CurrentUser() actor: Actor | null,
+    @Body() dto: GenerateProFormaQuoteDto,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.orders.getProFormaQuotePdf(actor, dto);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.end(buffer);
+  }
+
+  @Public()
+  @Get('orders/:id/proforma/pdf')
+  @ApiTags('orders')
+  @ApiOperation({ summary: 'Download Pro-Forma Invoice PDF for an existing order' })
+  @ApiParam({ name: 'id', required: true })
+  async downloadOrderProFormaPdf(
+    @CurrentUser() actor: Actor | null,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.orders.getProFormaQuotePdf(actor, { orderId: id });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.end(buffer);
+  }
+
   @Get('orders/:id/waybill')
   @ApiTags('orders')
   @ApiOperation({ summary: 'Get logistics shipping waybill data' })
@@ -298,4 +342,25 @@ export class OrdersController {
   checkInspectionExpiry(@CurrentUser() actor: Actor, @Param('id') id: string) {
     return this.orders.checkInspectionExpiry(actor, id);
   }
+
+  @Post('orders/:id/simulate-gps-ping')
+  @ApiTags('orders')
+  @ApiOperation({ summary: 'Simulate live courier GPS telemetry ping and broadcast via WebSocket' })
+  @ApiParam({ name: 'id', required: true })
+  @ApiOkResponse({ description: 'Simulated GPS ping emitted and broadcasted' })
+  simulateCourierGps(
+    @CurrentUser() actor: Actor,
+    @Param('id') id: string,
+    @Body()
+    dto?: {
+      latitude?: number;
+      longitude?: number;
+      speed?: number;
+      heading?: number;
+      stepPercent?: number;
+    },
+  ) {
+    return this.orders.simulateCourierGpsPing(actor, id, dto);
+  }
 }
+

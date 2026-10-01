@@ -3,7 +3,7 @@ import { Actor } from '@core/interfaces';
 import { mapOrder } from '@core/utils';
 import { DatabaseService } from '@database/database.service';
 import { NotificationsService } from '@domain/notifications/notifications.service';
-import { CreateOrderDto, FulfillDto, CreateEscrowDisputeDto, ResolveEscrowDisputeDto, EscrowResolutionType, VerifyDeliveryQrDto, UpdateOrderAddressDto } from '@domain/orders/dtos';
+import { CreateOrderDto, FulfillDto, CreateEscrowDisputeDto, ResolveEscrowDisputeDto, EscrowResolutionType, VerifyDeliveryQrDto, UpdateOrderAddressDto, GenerateProFormaQuoteDto } from '@domain/orders/dtos';
 import { assertItemStatusTransition, deriveOrderStatus } from '@domain/orders/order-status.util';
 import { PaymentsService } from '@domain/payments/payments.service';
 import {
@@ -19,7 +19,7 @@ import {
 import { PoolClient } from 'pg';
 import { UpdateOrderStatusDto } from './dtos/update-order-status.dto';
 import { OrdersGateway } from './orders.gateway';
-import { PdfGeneratorService, WaybillData } from './pdf-generator.service';
+import { PdfGeneratorService, WaybillData, ProFormaQuoteData, ProFormaQuoteItem } from './pdf-generator.service';
 
 function computeTrackingUrl(carrier?: string, trackingNumber?: string, customUrl?: string): string | null {
   if (customUrl && customUrl.trim()) return customUrl.trim();
@@ -99,6 +99,11 @@ export class OrdersService implements OnModuleInit {
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS destination_postal_code VARCHAR(32);
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS destination_latitude NUMERIC(10, 7);
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS destination_longitude NUMERIC(10, 7);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_latitude NUMERIC(10, 7);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_longitude NUMERIC(10, 7);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_heading NUMERIC(6, 2) DEFAULT 0;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_speed NUMERIC(6, 2) DEFAULT 0;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_last_ping_at TIMESTAMPTZ;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS arrival_alert_sent_at TIMESTAMPTZ;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS recipient_name VARCHAR(128);
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS recipient_phone VARCHAR(64);
@@ -257,9 +262,15 @@ export class OrdersService implements OnModuleInit {
       total = Number(countRows[0]?.total || 0);
     }
 
-    let queryStr = `SELECT o.*, u.email AS customer_email
+    let queryStr = `SELECT o.*, u.email AS customer_email,
+              dp.full_name AS delivery_partner_name,
+              dp.phone AS delivery_partner_phone,
+              dp.vehicle_type AS delivery_partner_vehicle,
+              dp.vehicle_plate_number AS delivery_partner_plate,
+              dp.rating AS delivery_partner_rating
        FROM orders o
        JOIN users u ON u.id = o.customer_id
+       LEFT JOIN delivery_partners dp ON dp.id = o.delivery_partner_id
        WHERE ${where}
        ORDER BY o.created_at DESC`;
 
@@ -392,9 +403,15 @@ export class OrdersService implements OnModuleInit {
 
   async getOne(actor: Actor, orderId: string) {
     const { rows: orders } = await this.db.query(
-      `SELECT o.*, u.email AS customer_email
+      `SELECT o.*, u.email AS customer_email,
+              dp.full_name AS delivery_partner_name,
+              dp.phone AS delivery_partner_phone,
+              dp.vehicle_type AS delivery_partner_vehicle,
+              dp.vehicle_plate_number AS delivery_partner_plate,
+              dp.rating AS delivery_partner_rating
        FROM orders o
        JOIN users u ON u.id = o.customer_id
+       LEFT JOIN delivery_partners dp ON dp.id = o.delivery_partner_id
        WHERE o.id = $1`,
       [orderId],
       actor,
@@ -501,7 +518,9 @@ export class OrdersService implements OnModuleInit {
         if (item.quantity > product.stock_quantity) {
           throw new BadRequestException(`Only ${product.stock_quantity} units available for "${product.title}"`);
         }
-        totalAmount += Number(product.price) * item.quantity;
+        const customTiers = (product.attributes as any)?.tierPricing;
+        const unitPrice = this.computeTierUnitPrice(Number(product.price), item.quantity, customTiers);
+        totalAmount += unitPrice * item.quantity;
       }
 
       totalAmount = Math.round(totalAmount * 100) / 100;
@@ -552,7 +571,8 @@ export class OrdersService implements OnModuleInit {
       // 2. Create order items and decrement stock
       for (const item of orderItemsToProcess) {
         const product = productMap.get(item.productId)!;
-        const unitPrice = Number(product.price);
+        const customTiers = (product.attributes as any)?.tierPricing;
+        const unitPrice = this.computeTierUnitPrice(Number(product.price), item.quantity, customTiers);
 
         await client.query(
           `INSERT INTO order_items (order_id, product_id, supplier_id, quantity, unit_price, status)
@@ -641,6 +661,25 @@ export class OrdersService implements OnModuleInit {
 
       return result;
     });
+  }
+
+  computeTierUnitPrice(basePrice: number, quantity: number, customTiers?: any[]): number {
+    if (Array.isArray(customTiers) && customTiers.length > 0) {
+      const sorted = [...customTiers].sort((a, b) => (b.minQuantity || 0) - (a.minQuantity || 0));
+      const matched = sorted.find((t) => quantity >= (t.minQuantity || 0));
+      if (matched) {
+        if (matched.unitPrice !== undefined) return Number(matched.unitPrice);
+        if (matched.discountPercent !== undefined) {
+          return Math.round(basePrice * (1 - matched.discountPercent / 100) * 100) / 100;
+        }
+      }
+    }
+
+    // Standard Nexus Wholesale Tiers: 10+ (12%), 50+ (20%), 100+ (28%)
+    if (quantity >= 100) return Math.round(basePrice * 0.72 * 100) / 100;
+    if (quantity >= 50) return Math.round(basePrice * 0.80 * 100) / 100;
+    if (quantity >= 10) return Math.round(basePrice * 0.88 * 100) / 100;
+    return basePrice;
   }
 
   async setItemStatus(actor: Actor, id: string, dto: FulfillDto) {
@@ -1277,6 +1316,196 @@ export class OrdersService implements OnModuleInit {
     const invoiceData = await this.getInvoiceData(actor, orderId);
     const buffer = await this.pdfGenerator.generateInvoicePdf(invoiceData);
     const filename = `${invoiceData.invoiceNumber}.pdf`;
+    return { buffer, filename };
+  }
+
+  async getProFormaQuoteData(
+    actor?: Actor | null,
+    dto?: GenerateProFormaQuoteDto,
+  ): Promise<ProFormaQuoteData> {
+    const quoteNumber = dto?.orderId
+      ? `PI-${dto.orderId.slice(0, 8).toUpperCase()}`
+      : `PI-2026-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    const issueDate = new Date();
+    const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+    const currency = (dto?.currency || 'USD').toUpperCase();
+    const currencySymbols: Record<string, string> = {
+      USD: '$',
+      EUR: '€',
+      GBP: '£',
+      INR: '₹',
+      AED: 'AED',
+      CAD: 'CA$',
+    };
+    const currencySymbol = currencySymbols[currency] || '$';
+    const exchangeRate = Number(dto?.exchangeRate) || 1.0;
+
+    let items: ProFormaQuoteItem[] = [];
+    let buyerName = dto?.buyerName || (actor ? actor.email?.split('@')[0] : 'Enterprise Procurement Officer');
+    let buyerEmail = dto?.email || (actor ? actor.email : 'procurement@enterprise.com');
+    let buyerCompany = dto?.companyName || 'Enterprise Wholesale Purchaser';
+    let buyerTaxId = dto?.taxId || 'VAT/GST Pending Registration';
+    let buyerAddress = dto?.billingAddress || dto?.shippingAddress || 'Designated Commercial Warehouse / Bonded Port';
+    let rfqRef = dto?.rfqId ? `RFQ-${dto.rfqId.slice(0, 8).toUpperCase()}` : null;
+
+    if (dto?.orderId) {
+      const { rows: orderRows } = await this.db.query(
+        `SELECT o.*, u.email AS customer_email, u.name AS customer_name
+         FROM orders o
+         JOIN users u ON u.id = o.customer_id
+         WHERE o.id = $1`,
+        [dto.orderId],
+        actor || undefined,
+      );
+
+      if (orderRows.length > 0) {
+        const order = orderRows[0];
+        buyerName = dto?.buyerName || order.customer_name || buyerName;
+        buyerEmail = dto?.email || order.customer_email || buyerEmail;
+        if (order.shipping_address) {
+          const addr = order.shipping_address;
+          buyerAddress = typeof addr === 'object'
+            ? [addr.street, addr.city, addr.state, addr.country, addr.postalCode].filter(Boolean).join(', ')
+            : String(addr);
+        }
+
+        const { rows: itemRows } = await this.db.query(
+          `SELECT i.*, p.title AS product_title, p.price AS product_base_price, p.attributes, s.store_name
+           FROM order_items i
+           JOIN products p ON p.id = i.product_id
+           LEFT JOIN suppliers s ON s.id = i.supplier_id
+           WHERE i.order_id = $1`,
+          [dto.orderId],
+          actor || undefined,
+        );
+
+        items = itemRows.map((it) => {
+          const qty = Number(it.quantity) || 1;
+          const basePrice = Number(it.product_base_price) || Number(it.unit_price);
+          const tieredPrice = Number(it.unit_price);
+          const discountPct = basePrice > tieredPrice ? Math.round(((basePrice - tieredPrice) / basePrice) * 100) : 0;
+          return {
+            productId: it.product_id,
+            productTitle: it.product_title,
+            productSku: `SKU-${it.product_id.slice(0, 8).toUpperCase()}`,
+            storeName: it.store_name || 'Nexus Verified Vendor',
+            quantity: qty,
+            baseUnitPrice: basePrice,
+            discountPercent: discountPct,
+            unitPrice: tieredPrice,
+            subtotal: Math.round(tieredPrice * qty * 100) / 100,
+          };
+        });
+      }
+    } else if (dto?.items && dto.items.length > 0) {
+      items = dto.items.map((it) => {
+        const qty = Number(it.quantity) || 1;
+        const basePrice = Number(it.unitPrice) || 0;
+        let discountPct = it.discountPercent;
+        if (discountPct === undefined) {
+          if (qty >= 100) discountPct = 28;
+          else if (qty >= 50) discountPct = 20;
+          else if (qty >= 10) discountPct = 12;
+          else discountPct = 0;
+        }
+        const effectiveUnit = it.customTierPrice !== undefined
+          ? Number(it.customTierPrice)
+          : this.computeTierUnitPrice(basePrice, qty);
+        return {
+          productId: it.productId,
+          productTitle: it.productTitle,
+          productSku: it.productSku || (it.productId ? `SKU-${it.productId.slice(0, 8).toUpperCase()}` : 'SKU-NX-BULK'),
+          storeName: it.storeName || 'Nexus Verified Vendor',
+          quantity: qty,
+          baseUnitPrice: basePrice,
+          discountPercent: discountPct,
+          unitPrice: effectiveUnit,
+          subtotal: Math.round(effectiveUnit * qty * 100) / 100,
+        };
+      });
+    }
+
+    if (items.length === 0) {
+      items = [
+        {
+          productTitle: 'Enterprise Commercial Wholesale Merchandise Lot',
+          productSku: 'SKU-NX-ENTERPRISE-01',
+          storeName: 'Nexus Global Wholesalers',
+          quantity: 25,
+          baseUnitPrice: 250.0,
+          discountPercent: 12,
+          unitPrice: 220.0,
+          subtotal: 5500.0,
+        },
+      ];
+    }
+
+    const grossSubtotal = items.reduce((acc, it) => acc + (it.baseUnitPrice * it.quantity), 0);
+    const discountedSubtotal = items.reduce((acc, it) => acc + it.subtotal, 0);
+    const volumeDiscountSavings = Math.max(0, Math.round((grossSubtotal - discountedSubtotal) * 100) / 100);
+    const taxRatePercent = 5.0;
+    const taxAmount = Math.round((discountedSubtotal * taxRatePercent / 100) * 100) / 100;
+    const shippingFee = 0;
+    const escrowProtectionFee = 0;
+    const totalAmount = Math.round((discountedSubtotal + taxAmount + shippingFee) * 100) / 100;
+
+    const convertedTotalAmount = currency !== 'USD'
+      ? Math.round(totalAmount * exchangeRate * 100) / 100
+      : undefined;
+
+    return {
+      quoteNumber,
+      documentType: 'OFFICIAL_PROFORMA_INVOICE_QUOTE',
+      rfqReference: rfqRef,
+      orderId: dto?.orderId || null,
+      issueDate,
+      validUntil,
+      status: 'CONFIRMED_PRICE_LOCK',
+      currency,
+      currencySymbol,
+      exchangeRate,
+      issuer: {
+        legalName: 'Nexus Global Logistics & Escrow Technologies Inc.',
+        taxId: 'US-EIN-94-3829102',
+        address: '100 Market St, Suite 1200, San Francisco, CA 94105, USA',
+        supportEmail: 'escrow-desk@nexus.market',
+        phone: '+1 (800) 555-NEXUS',
+        website: 'nexus.market',
+        escrowBankName: 'J.P. Morgan Chase & Nexus Escrow Depository Trust',
+        escrowIbanSwift: 'CHASUS33XXX / US92CHAS000192847192',
+      },
+      customer: {
+        name: buyerName,
+        companyName: buyerCompany,
+        email: buyerEmail,
+        accountType: 'Verified B2B Wholesale Buyer',
+        taxId: buyerTaxId,
+        shippingAddress: buyerAddress,
+      },
+      items,
+      subtotal: grossSubtotal,
+      volumeDiscountSavings,
+      taxRatePercent,
+      taxAmount,
+      shippingFee,
+      escrowProtectionFee,
+      totalAmount,
+      convertedTotalAmount,
+      convertedCurrency: currency,
+      paymentTerms: '100% Nexus Escrow Protected - Milestone Release on Buyer Inspection (72h SLA)',
+      notes: dto?.notes,
+    };
+  }
+
+  async getProFormaQuotePdf(
+    actor?: Actor | null,
+    dto?: GenerateProFormaQuoteDto,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const quoteData = await this.getProFormaQuoteData(actor, dto);
+    const buffer = await this.pdfGenerator.generateProFormaQuotePdf(quoteData);
+    const filename = `nexus-proforma-quote-${quoteData.quoteNumber}.pdf`;
     return { buffer, filename };
   }
 
@@ -2994,4 +3223,145 @@ export class OrdersService implements OnModuleInit {
       payout: rows[0],
     };
   }
+
+  /**
+   * Simulate real-time GPS telemetry ping for an order, updating coordinates and broadcasting to WebSocket
+   */
+  async simulateCourierGpsPing(
+    actor: Actor,
+    orderId: string,
+    dto?: { latitude?: number; longitude?: number; speed?: number; heading?: number; stepPercent?: number },
+  ) {
+    const { rows: orders } = await this.db.query(
+      `SELECT o.*, u.email as customer_email,
+              dp.full_name AS delivery_partner_name,
+              dp.phone AS delivery_partner_phone,
+              dp.vehicle_type AS delivery_partner_vehicle,
+              dp.vehicle_plate_number AS delivery_partner_plate
+       FROM orders o
+       JOIN users u ON u.id = o.customer_id
+       LEFT JOIN delivery_partners dp ON dp.id = o.delivery_partner_id
+       WHERE o.id = $1`,
+      [orderId],
+      actor,
+    );
+    const order = orders[0];
+    if (!order) throw new NotFoundException(`Order ${orderId} not found`);
+
+    // Target destination coords (default San Francisco hub if null)
+    const destLat = order.destination_latitude ? Number(order.destination_latitude) : 37.7749;
+    const destLng = order.destination_longitude ? Number(order.destination_longitude) : -122.4194;
+
+    // Origin depot: ~5.5km away
+    const originLat = destLat + 0.045;
+    const originLng = destLng - 0.035;
+
+    let lat: number;
+    let lng: number;
+    const speed = dto?.speed ?? 42;
+    const heading = dto?.heading ?? 135;
+
+    if (dto?.latitude !== undefined && dto?.longitude !== undefined) {
+      lat = Number(dto.latitude);
+      lng = Number(dto.longitude);
+    } else {
+      // Step-based interpolation
+      const step = dto?.stepPercent !== undefined ? Math.min(100, Math.max(0, dto.stepPercent)) / 100 : 0.65;
+      lat = Number((originLat + (destLat - originLat) * step).toFixed(6));
+      lng = Number((originLng + (destLng - originLng) * step).toFixed(6));
+    }
+
+    // Distance calculation
+    const R = 6371e3;
+    const phi1 = (lat * Math.PI) / 180;
+    const phi2 = (destLat * Math.PI) / 180;
+    const deltaPhi = ((destLat - lat) * Math.PI) / 180;
+    const deltaLambda = ((destLng - lng) * Math.PI) / 180;
+    const a =
+      Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+      Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distMeters = Math.round(R * c);
+
+    // Update status to OUT_FOR_DELIVERY if currently PENDING or PROCESSING or SHIPPED
+    let newStatus = order.status;
+    if (order.status !== OrderStatuses.DELIVERED && order.status !== OrderStatuses.OUT_FOR_DELIVERY) {
+      newStatus = OrderStatuses.OUT_FOR_DELIVERY;
+    }
+
+    await this.db.query(
+      `UPDATE orders
+       SET driver_latitude = $1,
+           driver_longitude = $2,
+           driver_heading = $3,
+           driver_speed = $4,
+           driver_last_ping_at = NOW(),
+           status = $5,
+           destination_latitude = COALESCE(destination_latitude, $6),
+           destination_longitude = COALESCE(destination_longitude, $7),
+           updated_at = NOW()
+       WHERE id = $8`,
+      [lat, lng, heading, speed, newStatus, destLat, destLng, orderId],
+    );
+
+    const partnerName = order.delivery_partner_name || 'Apex Express Fleet';
+    const vehicleType = order.delivery_partner_vehicle || 'Refrigerated Cargo Van';
+    const vehiclePlate = order.delivery_partner_plate || 'NX-7704-CA';
+
+    const payload = {
+      orderId,
+      partnerId: order.delivery_partner_id || 'fleet-courier-01',
+      partnerName,
+      vehicleType,
+      vehiclePlateNumber: vehiclePlate,
+      latitude: lat,
+      longitude: lng,
+      heading,
+      speed,
+      distanceMeters: distMeters,
+      remainingKm: Number((distMeters / 1000).toFixed(2)),
+      estimatedMinutes: Math.max(1, Math.round(distMeters / (speed > 0 ? (speed * 1000) / 60 : 500))),
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Broadcast driver location to customer room and admin room
+    this.ordersGateway.broadcastDriverLocation(orderId, order.customer_id, payload);
+
+    // If within 500m of destination dock and not alerted yet
+    if (distMeters <= 500 && !order.arrival_alert_sent_at) {
+      await this.db.query(`UPDATE orders SET arrival_alert_sent_at = NOW() WHERE id = $1`, [orderId]);
+      this.ordersGateway.broadcastDriverApproachingDock(orderId, order.customer_id, {
+        orderId,
+        partnerId: payload.partnerId,
+        partnerName,
+        vehicleType,
+        vehiclePlateNumber: vehiclePlate,
+        distanceMeters: distMeters,
+        estimatedArrivalMinutes: payload.estimatedMinutes,
+        destinationAddress: order.destination_address || 'Receiving Dock',
+        destinationCity: order.destination_city || 'San Francisco',
+        deliveryQrToken: order.delivery_qr_token,
+        arrivedAt: new Date().toISOString(),
+      });
+
+      void this.notifications.create(order.customer_id, {
+        title: '🚨 Courier Approaching Receiving Dock',
+        message: `${partnerName} (${vehicleType} • ${vehiclePlate}) is within ${distMeters}m of your delivery dock. Prepare your QR code for electronic handover.`,
+        type: 'ORDER',
+        metadata: {
+          orderId,
+          distanceMeters: distMeters,
+          qrToken: order.delivery_qr_token,
+        },
+      });
+    }
+
+    return {
+      success: true,
+      orderId,
+      status: newStatus,
+      telemetry: payload,
+    };
+  }
 }
+

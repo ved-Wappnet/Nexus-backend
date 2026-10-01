@@ -108,7 +108,7 @@ export class CurrencyService implements OnModuleInit, OnModuleDestroy {
       volatility[code] = {
         changePct,
         trend,
-        prev24h: prev,
+        prev24h: Number(prev.toFixed(2)),
         risk,
       };
     }
@@ -139,7 +139,7 @@ export class CurrencyService implements OnModuleInit, OnModuleDestroy {
 
         for (const code of supportedKeys) {
           if (data.rates[code] && typeof data.rates[code] === 'number') {
-            updatedRates[code] = Number(data.rates[code].toFixed(4));
+            updatedRates[code] = Number(data.rates[code].toFixed(2));
           }
         }
 

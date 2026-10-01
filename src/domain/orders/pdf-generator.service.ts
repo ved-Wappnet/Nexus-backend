@@ -103,6 +103,63 @@ export interface RemittanceAdviceData {
   notes?: string;
 }
 
+export interface ProFormaQuoteItem {
+  id?: string;
+  productId?: string;
+  productTitle: string;
+  productSku?: string;
+  storeName?: string;
+  quantity: number;
+  baseUnitPrice: number;
+  discountPercent?: number;
+  unitPrice: number;
+  subtotal: number;
+}
+
+export interface ProFormaQuoteData {
+  quoteNumber: string;
+  documentType: string;
+  rfqReference?: string | null;
+  orderId?: string | null;
+  issueDate: string | Date;
+  validUntil: string | Date;
+  status: string;
+  currency: string;
+  currencySymbol: string;
+  exchangeRate?: number;
+  issuer: {
+    legalName: string;
+    taxId: string;
+    address: string;
+    supportEmail: string;
+    phone: string;
+    website: string;
+    escrowBankName: string;
+    escrowIbanSwift: string;
+  };
+  customer: {
+    id?: string;
+    name: string;
+    companyName?: string;
+    email: string;
+    accountType?: string;
+    taxId?: string;
+    shippingAddress?: string;
+  };
+  items: ProFormaQuoteItem[];
+  subtotal: number;
+  volumeDiscountSavings: number;
+  taxRatePercent: number;
+  taxAmount: number;
+  shippingFee: number;
+  escrowProtectionFee: number;
+  totalAmount: number;
+  convertedTotalAmount?: number;
+  convertedCurrency?: string;
+  paymentTerms: string;
+  notes?: string;
+}
+
 @Injectable()
 export class PdfGeneratorService {
   private readonly logger = new Logger(PdfGeneratorService.name);
@@ -591,6 +648,285 @@ export class PdfGeneratorService {
         doc.end();
       } catch (error) {
         this.logger.error(`Failed to generate remittance advice PDF: ${(error as Error).message}`);
+        reject(error);
+      }
+    });
+  }
+
+  async generateProFormaQuotePdf(data: ProFormaQuoteData): Promise<Buffer> {
+    const qrPayload = JSON.stringify({
+      doc: 'PROFORMA_INVOICE',
+      quoteNumber: data.quoteNumber,
+      buyer: data.customer.name,
+      validUntil: data.validUntil,
+      amount: data.totalAmount,
+      currency: data.currency,
+      escrow: data.issuer.escrowBankName,
+    });
+
+    let qrBuffer: Buffer | null = null;
+    try {
+      qrBuffer = await QRCode.toBuffer(qrPayload, {
+        type: 'png',
+        width: 130,
+        margin: 1,
+        color: { dark: '#1e1b4b', light: '#ffffff' },
+      });
+    } catch (e) {
+      this.logger.warn(`Could not generate QR code for pro-forma: ${(e as Error).message}`);
+    }
+
+    return new Promise((resolve, reject) => {
+      try {
+        const doc = new PDFDocument({ margin: 40, size: 'A4' });
+        const buffers: Buffer[] = [];
+
+        doc.on('data', (chunk) => buffers.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(buffers)));
+        doc.on('error', (err) => reject(err));
+
+        const primaryColor = '#4338ca'; // Indigo 700
+        const accentAmber = '#b45309';  // Amber 700
+        const emeraldColor = '#059669'; // Emerald 600
+        const textDark = '#0f172a';     // Slate 900
+        const textMuted = '#64748b';    // Slate 500
+        const borderLight = '#e2e8f0';  // Slate 200
+        const cardBg = '#f8fafc';       // Slate 50
+
+        // 1. Top Header Bar
+        doc.rect(40, 40, 515, 65).fill(primaryColor);
+
+        doc.fillColor('#ffffff').fontSize(20).font('Helvetica-Bold')
+           .text('NEXUS', 55, 52, { continued: true })
+           .fontSize(10).font('Helvetica')
+           .text('  ENTERPRISE WHOLESALE', { baseline: 'middle' });
+
+        doc.fillColor('#cbd5e1').fontSize(8).font('Helvetica')
+           .text('Official B2B Direct Procurement & Escrow Settlement Quotation', 55, 75);
+
+        doc.fillColor('#ffffff').fontSize(14).font('Helvetica-Bold')
+           .text('PRO-FORMA INVOICE', 345, 50, { align: 'right', width: 195 });
+
+        doc.fillColor('#e2e8f0').fontSize(8).font('Helvetica')
+           .text(`Quote Ref: ${data.quoteNumber}`, 345, 68, { align: 'right', width: 195 })
+           .text(`Date: ${new Date(data.issueDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}`, 345, 80, { align: 'right', width: 195 });
+
+        // 2. Validity / Price-Lock Alert Strip (Clean without broken Unicode characters)
+        const alertY = 113;
+        doc.rect(40, alertY, 515, 24).fill('#fef3c7').strokeColor('#fde68a').lineWidth(1).stroke();
+        doc.fillColor(accentAmber).fontSize(8).font('Helvetica-Bold')
+           .text('• 30-DAY GUARANTEED WHOLESALE PRICE LOCK •', 52, alertY + 7, { continued: true })
+           .fillColor('#92400e').font('Helvetica')
+           .text(`  Valid through ${new Date(data.validUntil).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}  •  Binding milestone escrow terms apply.`);
+
+        // 3. 2-Column Addresses Section
+        const startY = 146;
+        const cardH = 96;
+
+        // Issuer Details Card (Left Column)
+        doc.rect(40, startY, 250, cardH).fill(cardBg).strokeColor(borderLight).lineWidth(0.5).stroke();
+        doc.fillColor(primaryColor).fontSize(8.5).font('Helvetica-Bold')
+           .text('ISSUER & ESCROW TRUSTEE', 50, startY + 8);
+
+        doc.fillColor(textDark).fontSize(8).font('Helvetica-Bold')
+           .text(data.issuer.legalName, 50, startY + 20, { width: 230, height: 11, ellipsis: true });
+
+        doc.fillColor(textMuted).fontSize(7.5).font('Helvetica')
+           .text(`Tax ID / EIN: ${data.issuer.taxId}`, 50, startY + 32, { width: 230, height: 10, ellipsis: true })
+           .text(data.issuer.address, 50, startY + 44, { width: 230, height: 10, ellipsis: true })
+           .text(`Email: ${data.issuer.supportEmail}  •  Tel: ${data.issuer.phone}`, 50, startY + 56, { width: 230, height: 10, ellipsis: true })
+           .text(`Escrow Depository: ${data.issuer.escrowBankName}`, 50, startY + 68, { width: 230, height: 10, ellipsis: true })
+           .text(`SWIFT / Wire: ${data.issuer.escrowIbanSwift}`, 50, startY + 80, { width: 230, height: 10, ellipsis: true });
+
+        // Buyer Details Card (Right Column)
+        doc.rect(305, startY, 250, cardH).fill(cardBg).strokeColor(borderLight).lineWidth(0.5).stroke();
+        doc.fillColor(primaryColor).fontSize(8.5).font('Helvetica-Bold')
+           .text('PRO-FORMA PREPARED FOR', 315, startY + 8);
+
+        doc.fillColor(textDark).fontSize(8).font('Helvetica-Bold')
+           .text(data.customer.companyName || data.customer.name, 315, startY + 20, { width: 230, height: 11, ellipsis: true });
+
+        doc.fillColor(textMuted).fontSize(7.5).font('Helvetica')
+           .text(`Contact: ${data.customer.name}`, 315, startY + 32, { width: 230, height: 10, ellipsis: true })
+           .text(`Email: ${data.customer.email}`, 315, startY + 44, { width: 230, height: 10, ellipsis: true })
+           .text(`Tax ID: ${data.customer.taxId || 'Corporate Enterprise Buyer'}`, 315, startY + 56, { width: 230, height: 10, ellipsis: true })
+           .text(`Delivery: ${data.customer.shippingAddress || 'Nexus Global Bonded Port'}`, 315, startY + 68, { width: 230, height: 10, ellipsis: true })
+           .text(`RFQ Tracking Ref: ${data.rfqReference || 'Direct Wholesale Order'}`, 315, startY + 80, { width: 230, height: 10, ellipsis: true });
+
+        // 4. Line Items Table Header
+        const tableTop = startY + cardH + 12;
+        doc.rect(40, tableTop, 515, 22).fill(primaryColor);
+
+        doc.fillColor('#ffffff').fontSize(7.5).font('Helvetica-Bold')
+           .text('LINE ITEM / MERCHANDISE', 50, tableTop + 6)
+           .text('SKU / VENDOR', 220, tableTop + 6)
+           .text('QTY', 345, tableTop + 6, { align: 'center', width: 30 })
+           .text('TIER DISC.', 380, tableTop + 6, { align: 'center', width: 55 })
+           .text('UNIT PRICE', 440, tableTop + 6, { align: 'right', width: 50 })
+           .text('TOTAL', 495, tableTop + 6, { align: 'right', width: 55 });
+
+        // 5. Line Items Rows
+        let currentY = tableTop + 22;
+        let isAlt = false;
+
+        data.items.forEach((item) => {
+          if (isAlt) {
+            doc.rect(40, currentY, 515, 28).fill(cardBg);
+          }
+
+          doc.fillColor(textDark).fontSize(8).font('Helvetica-Bold')
+             .text(item.productTitle, 50, currentY + 6, { width: 165, lineBreak: false, ellipsis: true });
+
+          doc.fillColor(textMuted).fontSize(7).font('Helvetica')
+             .text(`${item.productSku || 'SKU-NX'} • ${item.storeName || 'Direct'}`, 220, currentY + 6, { width: 120, lineBreak: false, ellipsis: true });
+
+          doc.fillColor(textDark).fontSize(8).font('Helvetica')
+             .text(String(item.quantity), 345, currentY + 6, { align: 'center', width: 30 });
+
+          if (item.discountPercent && item.discountPercent > 0) {
+            doc.rect(382, currentY + 5, 50, 15).fill('#ecfdf5');
+            doc.fillColor(emeraldColor).fontSize(7).font('Helvetica-Bold')
+               .text(`${item.discountPercent}% OFF`, 382, currentY + 8, { align: 'center', width: 50 });
+          } else {
+            doc.fillColor(textMuted).fontSize(7).font('Helvetica')
+               .text('MOQ Base', 380, currentY + 7, { align: 'center', width: 55 });
+          }
+
+          doc.fillColor(textDark).fontSize(8).font('Helvetica')
+             .text(`$${item.unitPrice.toFixed(2)}`, 440, currentY + 6, { align: 'right', width: 50 })
+             .font('Helvetica-Bold')
+             .text(`$${item.subtotal.toFixed(2)}`, 495, currentY + 6, { align: 'right', width: 55 });
+
+          currentY += 28;
+          isAlt = !isAlt;
+        });
+
+        // Table bottom border
+        doc.moveTo(40, currentY).lineTo(555, currentY).strokeColor(borderLight).lineWidth(1).stroke();
+
+        // 6. Dual Cards: Escrow Wire Instructions (Left) & Financial Reconciliation (Right)
+        const blockY = currentY + 12;
+        const blockH = 136;
+
+        // --- Left Card: Escrow Settlement & QR Box ---
+        doc.rect(40, blockY, 250, blockH).fill('#ffffff').strokeColor(borderLight).lineWidth(0.5).stroke();
+        doc.rect(40, blockY, 250, 20).fill('#eef2ff');
+        doc.fillColor(primaryColor).fontSize(8).font('Helvetica-Bold')
+           .text('ESCROW TREASURY & WIRE SETTLEMENT', 50, blockY + 6);
+
+        if (qrBuffer) {
+          doc.image(qrBuffer, 48, blockY + 28, { width: 78, height: 78 });
+        }
+
+        const escrowTextX = 134;
+        doc.fillColor(textDark).fontSize(7.5).font('Helvetica-Bold')
+           .text('Depository:', escrowTextX, blockY + 28)
+           .font('Helvetica').fillColor(textMuted)
+           .text('J.P. Morgan Chase N.A.', escrowTextX, blockY + 38)
+           .font('Helvetica-Bold').fillColor(textDark)
+           .text('Wire Reference / Ref:', escrowTextX, blockY + 50)
+           .font('Helvetica').fillColor(primaryColor)
+           .text(data.quoteNumber, escrowTextX, blockY + 60)
+           .font('Helvetica-Bold').fillColor(textDark)
+           .text('Routing Protocol:', escrowTextX, blockY + 72)
+           .font('Helvetica').fillColor(textMuted)
+           .text('Fedwire / ACH / SWIFT', escrowTextX, blockY + 82)
+           .font('Helvetica-Bold').fillColor(textDark)
+           .text('Clearance Status:', escrowTextX, blockY + 94)
+           .font('Helvetica-Bold').fillColor(emeraldColor)
+           .text('PRE-AUTHORIZED LOCK', escrowTextX, blockY + 104);
+
+        doc.fillColor(textMuted).fontSize(6.5).font('Helvetica')
+           .text('Scan QR with mobile device to approve purchase order & initiate escrow deposit.', 50, blockY + 116, { width: 230 });
+
+        // --- Right Card: Financial Reconciliation & Total ---
+        doc.rect(305, blockY, 250, blockH).fill('#ffffff').strokeColor(borderLight).lineWidth(0.5).stroke();
+        doc.rect(305, blockY, 250, 20).fill('#f1f5f9');
+        doc.fillColor(textDark).fontSize(8).font('Helvetica-Bold')
+           .text('WHOLESALE RECONCILIATION', 315, blockY + 6);
+
+        const recX = 315;
+        const recValX = 460;
+        const recValW = 85;
+        let lineY = blockY + 26;
+
+        doc.fillColor(textMuted).fontSize(7.5).font('Helvetica')
+           .text('Gross List Subtotal:', recX, lineY)
+           .text(`$${data.subtotal.toFixed(2)}`, recValX, lineY, { align: 'right', width: recValW });
+        lineY += 13;
+
+        if (data.volumeDiscountSavings > 0) {
+          doc.fillColor(emeraldColor).font('Helvetica-Bold')
+             .text('Wholesale Volume Savings:', recX, lineY)
+             .text(`-$${data.volumeDiscountSavings.toFixed(2)}`, recValX, lineY, { align: 'right', width: recValW });
+          lineY += 13;
+        }
+
+        doc.fillColor(textMuted).font('Helvetica')
+           .text('Nexus 72h Escrow Guarantee:', recX, lineY)
+           .text('INCLUDED', recValX, lineY, { align: 'right', width: recValW });
+        lineY += 13;
+
+        doc.text('Logistics Freight:', recX, lineY)
+           .text(data.shippingFee === 0 ? 'FREE FREIGHT' : `$${data.shippingFee.toFixed(2)}`, recValX, lineY, { align: 'right', width: recValW });
+        lineY += 13;
+
+        doc.text(`Estimated Taxes / VAT (${data.taxRatePercent}%):`, recX, lineY)
+           .text(`$${data.taxAmount.toFixed(2)}`, recValX, lineY, { align: 'right', width: recValW });
+
+        // Bottom Total Banner in Right Card
+        doc.rect(305, blockY + blockH - 38, 250, 38).fill(primaryColor);
+        doc.fillColor('#ffffff').fontSize(8.5).font('Helvetica-Bold')
+           .text('TOTAL AMOUNT PAYABLE:', 315, blockY + blockH - 30)
+           .fontSize(11).font('Helvetica-Bold')
+           .text(`$${data.totalAmount.toFixed(2)} USD`, 415, blockY + blockH - 32, { align: 'right', width: 130 });
+
+        if (data.convertedCurrency && data.convertedCurrency !== 'USD' && data.convertedTotalAmount) {
+          doc.fillColor('#fde68a').fontSize(7.5).font('Helvetica')
+             .text(`Approx. ${data.currencySymbol} ${data.convertedTotalAmount.toFixed(2)} ${data.convertedCurrency} (1 USD = ${data.exchangeRate})`, 315, blockY + blockH - 16, { align: 'right', width: 230 });
+        }
+
+        // 7. Terms & Conditions Box
+        const termsY = blockY + blockH + 10;
+        doc.rect(40, termsY, 515, 58).fill('#fafafa').strokeColor(borderLight).lineWidth(0.5).stroke();
+
+        doc.fillColor(textDark).fontSize(7.5).font('Helvetica-Bold')
+           .text('WHOLESALE PROCUREMENT TERMS & ESCROW CONDITIONS', 50, termsY + 7);
+
+        doc.fillColor(textMuted).fontSize(6.5).font('Helvetica')
+           .text('1. Escrow Protection: Funds held in neutral escrow until delivery and sign-off of the 72-hour goods inspection window.', 50, termsY + 18)
+           .text('2. Volume Guarantee: Price discounts shown reflect committed wholesale tier volumes. Reduction in quantities voids tier pricing.', 50, termsY + 28)
+           .text('3. Currency & Freight: Freight estimates include bonded customs clearance. International currency conversions guaranteed for 30 days.', 50, termsY + 38)
+           .text('4. Purchase Order Acceptance: Countersigning or issuing an enterprise PO against this Pro-Forma Invoice locks supplier inventory.', 50, termsY + 48);
+
+        // 8. Signatures Block
+        const signY = termsY + 66;
+        doc.rect(40, signY, 250, 58).fill('#ffffff').strokeColor(borderLight).lineWidth(0.5).stroke();
+        doc.fillColor(textMuted).fontSize(7).font('Helvetica-Bold')
+           .text('AUTHORIZED ISSUING SIGNATURE (NEXUS)', 50, signY + 7);
+        doc.fillColor(primaryColor).fontSize(8).font('Helvetica-Bold')
+           .text('Nexus Global Automated Underwriting Desk', 50, signY + 28);
+        doc.fillColor(textMuted).fontSize(6).font('Helvetica')
+           .text('Cryptographically Verified & Digitally Certified', 50, signY + 40);
+
+        doc.rect(305, signY, 250, 58).fill('#ffffff').strokeColor(borderLight).lineWidth(0.5).stroke();
+        doc.fillColor(textMuted).fontSize(7).font('Helvetica-Bold')
+           .text('BUYER ACCEPTANCE & PO SIGN-OFF', 315, signY + 7);
+        doc.moveTo(315, signY + 40).lineTo(540, signY + 40).strokeColor(borderLight).lineWidth(0.5).stroke();
+        doc.fillColor(textMuted).fontSize(6).font('Helvetica')
+           .text('Authorized Signatory, Title & Corporate Date Stamp', 315, signY + 44);
+
+        // 9. Footer Notice
+        const footerY = signY + 66;
+        doc.moveTo(40, footerY).lineTo(555, footerY).strokeColor(borderLight).lineWidth(0.5).stroke();
+
+        doc.fillColor(textMuted).fontSize(6.5).font('Helvetica')
+           .text('Nexus Global Logistics & Financial Technologies Inc. • Enterprise B2B Wholesale Commerce Platform', 40, footerY + 6, { align: 'center', width: 515 })
+           .text(`Document Ref: NX-PROFORMA-${data.quoteNumber} • Generated on ${new Date().toISOString()} • Strictly Confidential`, 40, footerY + 15, { align: 'center', width: 515 });
+
+        doc.end();
+      } catch (error) {
+        this.logger.error(`Failed to generate pro-forma quote PDF: ${(error as Error).message}`);
         reject(error);
       }
     });

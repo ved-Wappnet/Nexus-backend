@@ -44,6 +44,8 @@ import { ProductsService } from './products.service';
 import { AiReviewService } from './ai-review.service';
 import { PriceComparisonService } from './price-comparison.service';
 import { PriceAlertService } from './price-alert.service';
+import { VisualSearchService } from './visual-search.service';
+import { VisualSearchDto } from './dtos/visual-search.dto';
 
 const products = 'products';
 
@@ -58,6 +60,7 @@ export class ProductsController {
     private readonly aiReview: AiReviewService,
     private readonly priceComparison: PriceComparisonService,
     private readonly priceAlerts: PriceAlertService,
+    private readonly visualSearchService: VisualSearchService,
   ) {}
 
 
@@ -290,6 +293,18 @@ export class ProductsController {
   @ApiParam({ name: 'id', description: 'Product ID' })
   simulatePriceDrop(@Param('id') id: string, @Body() dto: SimulatePriceDropDto) {
     return this.priceAlerts.evaluateProductAlerts(id, dto.newPrice);
+  }
+
+  @Public()
+  @Post('visual-search')
+  @UseInterceptors(FileInterceptor('image', productImageMulterOptions))
+  @ApiConsumes('multipart/form-data', 'application/json')
+  @ApiOperation({ summary: 'AI Visual Image Search: match catalog products by photo upload, URL, or base64' })
+  visualSearch(
+    @UploadedFile() image?: Express.Multer.File,
+    @Body() dto?: VisualSearchDto,
+  ) {
+    return this.visualSearchService.searchByImage(image, dto);
   }
 }
 

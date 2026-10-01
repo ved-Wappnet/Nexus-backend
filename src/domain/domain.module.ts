@@ -12,6 +12,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { ProductsModule } from './products';
 import { QuotesModule } from './quotes/quotes.module';
 import { MarketingModule } from './marketing/marketing.module';
+import { LandedCostModule } from './landed-cost/landed-cost.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { MarketingModule } from './marketing/marketing.module';
     ChatbotModule,
     DeliveryPartnersModule,
     MarketingModule,
+    LandedCostModule,
   ],
 })
 export class DomainModule {}

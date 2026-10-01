@@ -4,4 +4,4 @@ export * from './release-escrow.dto';
 export * from './escrow-dispute.dto';
 export * from './verify-delivery-qr.dto';
 export * from './update-order-address.dto';
-
+export * from './proforma-quote.dto';
